@@ -1,82 +1,75 @@
-abstract FixedArray{T, NDim, SIZE}
-abstract MutableFixedArray{T, NDim, SIZE} <: FixedArray{T, NDim, SIZE}
+#-------------------------------------------------------------------------------
+# Abstract type hierarchy
 
-typealias MutableFixedVector{T, CARDINALITY} MutableFixedArray{T, 1, Tuple{CARDINALITY}}
-typealias MutableFixedMatrix{T, M, N}        MutableFixedArray{T, 2, Tuple{M,N}}
+"""
+    FixedArray{T,D}
 
-typealias FixedVector{CARDINALITY, T}        FixedArray{T, 1, Tuple{CARDINALITY,}}
-typealias FixedMatrix{Row, Column, T}        FixedArray{T, 2, Tuple{Row, Column}}
+Super type for all fixed size arrays of eltype `T` and dimension `D`.
 
-abstract FixedVectorNoTuple{CARDINALITY, T} <: FixedVector{CARDINALITY, T}
-export FixedVectorNoTuple
+The extents of the fixed dimensions aren't specified here due to technical
+limitations.  (It'd have to be an `NTuple{Int,D}`, but `TypeVar`s representing
+the extent of the dimensions in `FixedArray` subtypes can't be placed into this
+tuple when subtyping.)
+"""
+abstract FixedArray{T,D} <: AbstractArray{T,D}
+
+# Define a subtype of FixedArray for each dimension.  Ideally we'd have the
+# fixed size type parameters in FixedArray itself, but it's not clear how we
+# can actually do this in a good way since type constructors are fairly
+# restricted.
+abstract FixedArray1{N,T}       <: FixedArray{T,1}
+abstract FixedArray2{N,M,T}     <: FixedArray{T,2}
+abstract FixedArray3{N,M,P,T}   <: FixedArray{T,3}
+abstract FixedArray4{N,M,P,Q,T} <: FixedArray{T,4}
+# Is there any point going to more dimensions than MAX_TUPLE_DEPTH?
+abstract FixedArray5{N,M,P,Q,R,T} <: FixedArray{T,5}
+
+typealias FixedVector FixedArray1
+typealias FixedMatrix FixedArray2
+
+abstract FixedVectorNoTuple{N,T} <: FixedVector{N,T}
+
+#-------------------------------------------------------------------------------
+# Primary interface to elements: Tuple(FSA)
+@inline Base.Tuple(A::FixedArray) = A.values
 
 
-_size{T <: Tuple}(::Type{T}) = (T.parameters...)
-_size{N, N2}(::Type{Tuple{N, N2}}) = (N,N2)
-_size{N}(::Type{Tuple{N}}) = (N,)
+#-------------------------------------------------------------------------------
+# Implement parts of the AbstractArray interface
 
-eltype{T <: FixedArray}(A::Type{T}) = eltype_or(T, Any)
-eltype{T <: FixedArray,N,SZ}(A::FixedArray{T,N,SZ}) = T
-
-
-length{T <: FixedArray}(A::Type{T}) = prod(size(T))
-length{T <: FixedArray}(A::T) = length(T)
-
-endof{T <: FixedArray}(A::Type{T}) = length(T)
-endof{T <: FixedArray}(A::T) = endof(T)
-
-
-@generated function ndims{T <: FixedArray}(A::Type{T})
-    :($(fsa_abstract(T).parameters[2]))
-end
-ndims{T <: FixedArray}(A::T) = ndims(T)
-
-
-size{T,N,SZ}(A::Type{FixedArray{T,N,SZ}}) = _size(SZ)
-size{T <: FixedArray}(A::Type{T}) = size_or(T, ())
-size{T <: FixedArray}(A::T) = size(T)
-
-size{T <: FixedArray}(A::Type{T}, d::Integer) = size(T)[d]
-size{T <: FixedArray}(A::T, d::Integer) = size(T, d)
-
-@generated function fsa_abstract{FSA <: FixedArray}(::Type{FSA})
-    ff = FSA
-    while ff.name.name != :FixedArray
-       ff = supertype(ff)
+# Get the fixed-dimension subtype of a FixedArray
+@generated function fsa_abstract1{A<:FixedArray}(::Type{A})
+    T = A
+    while supertype(T).name.name != :FixedArray
+       T = supertype(T)
     end
-    :($ff)
-end
-@generated function size_or{FSA <: FixedArray}(::Type{FSA}, OR)
-    fsatype = fsa_abstract(FSA)
-    sz = fsatype.parameters[3]
-    isa(sz, TypeVar) && return :(OR)
-    any(x->isa(x, TypeVar), sz.parameters) && return :(OR)
-    :($(_size(sz)))
-end
-@generated function eltype_or{FSA <: FixedArray}(::Type{FSA}, OR)
-    fsatype = fsa_abstract(FSA)
-    T = fsatype.parameters[1]
-    isa(T, TypeVar) && return :(OR)
     :($T)
 end
-@generated function ndims_or{FSA <: FixedArray}(::Type{FSA}, OR)
-    fsatype = fsa_abstract(FSA)
-    N = fsatype.parameters[2]
-    isa(N, TypeVar) && return :(OR)
-    :($N)
-end
 
-# Iterator
-start(A::FixedArray) = 1
-function next(A::FixedArray, state::Integer)
-    @inbounds x = A[state]
-    (x, state+1)
-end
-done(A::FixedArray, state::Integer) = length(A) < state
+@inline Base.size{A<:FixedArray}(::Type{A}) = size(supertype(A))
+@inline Base.size{A<:FixedArray}(a::A) = size(A)
 
-@generated function basetype{T<:FixedArray}(::Type{T})
-    :($(T.name.primary))
-end
+@inline Base.size{N,T}(::Type{FixedArray1{N,T}}) = (N,)
+@inline Base.size{N,M,T}(::Type{FixedArray2{N,M,T}}) = (N,M)
+@inline Base.size{N,M,P,Q,T}(::Type{FixedArray4{N,M,P,Q,T}}) = (N,M,P,Q)
+@inline Base.size{N,M,P,Q,R,T}(::Type{FixedArray5{N,M,P,Q,R,T}}) = (N,M,P,Q,R)
+
+# TODO: LinearFast or LinearSlow?  Probably LinearFast because the divisors in
+# ind2sub are known at compile time.
+Base.linearindexing{A<:FixedArray}(::Type{A}) = Base.LinearFast()
+
+# Multidimensional indexing
+@inline Base.getindex(A::FixedArray1, i::Int) = Tuple(A)[i]
+@inline Base.getindex(A::FixedArray2, i::Int, j::Int) = Tuple(A)[j][i]
+@inline Base.getindex(A::FixedArray4, i::Int, j::Int, p::Int, q::Int) = Tuple(A)[q][p][j][i]
+@inline Base.getindex(A::FixedArray5, i::Int, j::Int, p::Int, q::Int, r::Int) = Tuple(A)[r][q][p][j][i]
+
+# Linear indexing
+@inline Base.getindex{N,M}(A::FixedArray2{N,M}, i::Int) = A[ind2sub((N,M), i)...]
+@inline Base.getindex{N,M,P}(A::FixedArray3{N,M,P}, i::Int) = A[ind2sub((N,M,P), i)...]
+@inline Base.getindex{N,M,P,Q}(A::FixedArray4{N,M,P,Q}, i::Int) = A[ind2sub((N,M,P,Q), i)...]
+@inline Base.getindex{N,M,P,Q,R}(A::FixedArray5{N,M,P,Q,R}, i::Int) = A[ind2sub((N,M,P,Q,R), i)...]
+
 
 """
     similar_type(::Type{FSA}, [::Type{T}=eltype(FSA)], [sz=size(FSA)])
@@ -154,18 +147,6 @@ end
 # similar_type versions with defaulted eltype and size
 @pure similar_type{FSA <: FixedArray, T}(::Type{FSA}, ::Type{T}) = similar_type(FSA, T, size(FSA))
 @pure similar_type{FSA <: FixedArray}(::Type{FSA}, sz::Tuple) = similar_type(FSA, eltype(FSA), sz)
-
-# Deprecated similar() -> similar_type()
-function get_tuple(f::FixedArray)
-    Base.depwarn("get_tuple(f::FixedArray) is deprecated, use Tuple(f) instead", :get_tuple)
-    Tuple(f)
-end
-function similar{FSA <: FixedArray}(::Type{FSA}, args...)
-    Base.depwarn("similar{FSA<:FixedArray}(::Type{FSA}, ...) is deprecated, use similar_type instead", :similar)
-    similar_type(FSA, args...)
-end
-similar{FSA <: FixedArray}(::Type{FSA}, sz::Int...) = similar(FSA, eltype(FSA), sz)
-similar{FSA <: FixedArray,T}(::Type{FSA}, ::Type{T}, sz::Int...) = similar(FSA, T, sz)
 
 @compat @generated function (::Type{T}){T<:Tuple, N, T1}(f::FixedVectorNoTuple{N, T1})
     return Expr(:tuple, ntuple(i->:(f[$i]), N)...)
